@@ -16,12 +16,14 @@ subnet 192.224.4.0 netmask 255.255.255.0 {
 
 # Network 2
 subnet 192.224.2.0 netmask 255.255.255.0 {
+    range 192.224.2.10 192.224.2.35;
     option routers 192.224.2.1;
     option broadcast-address 192.224.2.255;
 }
 
 # Network 3
 subnet 192.224.3.0 netmask 255.255.255.0 {
+    range 192.224.3.10 192.224.3.89;
     option routers 192.224.3.1;
     option broadcast-address 192.224.3.255;
 }
