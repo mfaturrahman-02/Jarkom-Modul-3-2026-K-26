@@ -34,3 +34,6 @@ Pembagian jaringan untuk host:
 | | | | | tengen | Debian (Infrastruktur) | 192.224.4.8/24 |
 | | | | | yaga | Debian (Infrastruktur) | 192.224.4.9/24 |
 | | | | | inumaki | Debian (Infrastruktur) | 192.224.4.10/24 |
+
+
+2. Tengen, penjaga pusat distribusi di Data Center, harus mengambil alih pengalokasian alamat bagi wilayah yang membutuhkan konfigurasi dinamis. Konfigurasikan isc-dhcp-server pada [PREFIX IP].4.10. Deklarasikan Network 4 ([PREFIX IP].4.0/24) sebagai subnet lokal tanpa pool dinamis, lalu siapkan scope DHCP untuk Network 2 ([PREFIX IP].2.0/24) dan Network 3 ([PREFIX IP].3.0/24). Validasi konfigurasi dan pastikan service aktif tanpa error “No subnet declaration”.
