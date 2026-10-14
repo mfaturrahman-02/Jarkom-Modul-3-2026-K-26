@@ -583,6 +583,7 @@ Pada `kugisaki` Network 3:
 11. Utahime dan Shoko ditugaskan membangun sistem penamaan domain resmi agar seluruh pos tidak perlu menghafal alamat IP mentah. Konfigurasikan BIND9 pada utahime sebagai DNS Master dan shoko sebagai DNS Slave untuk mengelola domain jujutsu.<xxxx>.com. Atur SOA record, NS delegasi untuk kedua server, dan terapkan allow-transfer dari Master ke Slave. Pastikan file zona berhasil tersinkronisasi otomatis ke shoko saat nomor serial di utahime dinaikkan, lalu buktikan dengan melakukan query dig ke kedua server dari salah satu client.
 
 **Pada bagian utahime (DNS Master)**
+
 Lakukan install BIND9 terlebih dahulu dengan menjalankan pada node utahime:
 ```
 echo "nameserver 192.168.122.1" > /etc/resolv.conf
@@ -663,6 +664,7 @@ dig @127.0.0.1 jujutsu.K26.com NS +short
 <img width="1066" height="142" alt="image" src="https://github.com/user-attachments/assets/82990d8c-c796-4f6a-aa86-fc7b9209f95c" />
 
 **Pada bagian shoko (DNS Slave)**
+
 Lakukan install BIND9 terlebih dahulu dengan menjalankan pada node `shoko`:
 ```
 echo "nameserver 192.168.122.1" > /etc/resolv.conf
@@ -721,6 +723,7 @@ dig @127.0.0.1 jujutsu.K26.com SOA +short
 <img width="613" height="87" alt="Screenshot 2026-10-14 132554" src="https://github.com/user-attachments/assets/67e492c1-1732-431a-bd26-d4d1f0b6eb9b" />
 
 **Uji sinkronisasi otomatis**
+
 Periksa serial saat ini terlebih dahulu:
 ```
 grep -A5 'SOA' /etc/bind/zones/db.jujutsu.K26.com
@@ -755,6 +758,7 @@ dig @192.224.1.3 uji.jujutsu.K26.com TXT +short
 <img width="571" height="42" alt="image" src="https://github.com/user-attachments/assets/637a4a71-397f-4b4a-be0d-932b6cc38460" />
 
 **Uji query dari client Itadori**
+
 Lakukan pengujian dari client itadori.
 Pastikan client terhubung ke jaringan
 ```
@@ -779,6 +783,7 @@ dig @192.224.1.3 uji.jujutsu.K26.com TXT +short
 12. Peta domain harus memetakan pintu masuk utama dan tetap bisa mencari alamat di luar kawasan Shibuya. Pada utahime, buat A record jujutsu.<xxxx>.com yang mengarah ke gojo, serta CNAME www yang merujuk ke domain utama tersebut. Buat pula Reverse DNS (zona PTR) untuk melacak IP gojo kembali ke domain resminya, dan aktifkan fitur DNS Forwarder pada BIND9 mengarah ke IP gateway internet (192.168.122.1). Uji dari client dengan dig untuk mengecek CNAME, PTR, dan buktikan client tetap bisa melakukan ping ke domain internet seperti google.com.
 
 **Pada utahime (DNS Master)**
+
 Cek serial zona saat ini:
 ```
 grep Serial /etc/bind/zones/db.jujutsu.K26.com
@@ -884,6 +889,7 @@ dig @127.0.0.1 google.com +short
 Pastikan A record mengarah ke 192.224.1.4, CNAME www mengarah ke jujutsu.K26.com., PTR mengarah ke jujutsu.K26.com., dan google.com mendapat IP lewat forwarder.
 
 **Pada Shoko (DNS Slave)**
+
 Aktifkan DNS Forwarder:
 ```
 cat > /etc/bind/named.conf.options <<'EOF'
@@ -938,6 +944,7 @@ dig @127.0.0.1 google.com +short
 <img width="462" height="146" alt="Screenshot 2026-10-14 134541" src="https://github.com/user-attachments/assets/736b5fdc-567f-48e8-b9bf-5db413ee3299" />
 
 **Uji CNAME, PTR, dan akses internet pada client Itadori**
+
 Pada client itadori, pastikan IP dan DNS sudah didapat dari DHCP:
 ```
 pkill udhcpc 2>/dev/null
