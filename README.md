@@ -35,6 +35,8 @@ Pembagian jaringan untuk host:
 | | | | | yaga | Debian (Infrastruktur) | 192.224.4.8/24 |
 | | | | | inumaki | Debian (Infrastruktur) | 192.224.4.9/24 |
 
+tupologi jaringan
+![](asset/tupologi.png) 
 
 **Untuk Network 1**
 
@@ -484,7 +486,11 @@ ping -c 2 192.224.2.1
 <img width="898" height="495" alt="image" src="https://github.com/user-attachments/assets/7b02448b-1aa0-4965-8800-d5ec6d10d3f9" />
 
 10. Setelah gangguan Shibuya tertangani, pastikan pemulihan bertahan setelah restart. Aktifkan autostart DHCP Server pada tengen dan DHCP Relay pada jichi, lalu restart kedua node. Verifikasi status layanan, IP, gateway, lease, dan konektivitas client Network 2–3. Pastikan kebijakan Pool 1, Pool 2, short lease, long lease, dan fixed address tetap berlaku.
+<<<<<<< Updated upstream
     
+=======
+
+>>>>>>> Stashed changes
 Pada tengen, periksa interface DHCP Server:
 ```
 cat /etc/default/isc-dhcp-server
@@ -972,9 +978,915 @@ dig @192.224.1.2 google.com +short
 dig @192.224.1.3 google.com +short
 ```
 
+<<<<<<< Updated upstream
 Buktikan client bisa ping ke domain internet:
 ```
 ping -c 3 google.com
 ```
 
 <img width="764" height="416" alt="Screenshot 2026-10-14 135256" src="https://github.com/user-attachments/assets/e2467e35-88ef-4bc4-b260-eaae3d79c80a" />
+
+
+13. Kepala Sekolah Yaga dan Inumaki mendirikan database terpusat yang redundan agar log aktivitas kutukan tetap aman tersimpan. Konfigurasikan MariaDB pada yaga sebagai DB-Master dan inumaki sebagai DB-Slave. Buat database db_shibuya_<xxxx> beserta tabel request_logs di Master, aktifkan binary logging (log-bin, server-id), lalu hubungkan inumaki sebagai Slave yang menyalin data secara realtime dengan CHANGE MASTER TO. Berikan hak akses remote bagi seluruh node di Network 4, lalu buktikan replikasi berhasil dengan memasukkan data baru di Master dan memeriksa hasilnya di Slave.
+
+**Penjelasan soal**
+
+Soal ini meminta database terpusat yang *redundan*. `yaga` menjadi **Master** (tempat data ditulis) dan `inumaki` menjadi **Slave** (salinan realtime dari Master). Kalau Master bermasalah, data log tetap ada di Slave. Hal yang diminta:
+
+1. Database `db_shibuya_K26` dan tabel `request_logs` dibuat di Master.
+2. Binary logging (`log-bin`) dan `server-id` diaktifkan. Binary log mencatat semua perubahan data, dan itulah yang dibaca Slave untuk menyalin data.
+3. Slave dihubungkan ke Master dengan `CHANGE MASTER TO`.
+4. Seluruh node Network 4 (`192.224.4.0/24`) boleh mengakses database dari jaringan (remote), karena worker API akan menulis log ke yaga.
+5. Bukti: data baru yang dimasukkan di Master muncul di Slave.
+
+**Langkah 1. Konfigurasi Master (yaga)**
+
+Simpan sebagai `/root/soal13-yaga.sh`, lalu jalankan dengan `bash /root/soal13-yaga.sh`.
+
+```bash
+#!/bin/bash
+echo "nameserver 192.168.122.1" > /etc/resolv.conf
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server
+
+mkdir -p /var/log/mysql && chown mysql:mysql /var/log/mysql
+cat > /etc/mysql/mariadb.conf.d/99-replication.cnf <<'EOF'
+[mysqld]
+bind-address = 0.0.0.0
+server-id    = 1
+log_bin      = /var/log/mysql/mysql-bin.log
+EOF
+
+service mariadb restart
+sleep 3
+
+mariadb <<'SQL'
+CREATE DATABASE IF NOT EXISTS db_shibuya_K26;
+USE db_shibuya_K26;
+CREATE TABLE IF NOT EXISTS request_logs (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  hostname VARCHAR(50),
+  client_ip VARCHAR(45),
+  uri VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE USER IF NOT EXISTS 'repl'@'192.224.4.%' IDENTIFIED BY 'ReplPass123';
+GRANT REPLICATION SLAVE ON *.* TO 'repl'@'192.224.4.%';
+CREATE USER IF NOT EXISTS 'shibuya'@'192.224.4.%' IDENTIFIED BY 'ShibuyaPass123';
+GRANT ALL PRIVILEGES ON db_shibuya_K26.* TO 'shibuya'@'192.224.4.%';
+FLUSH PRIVILEGES;
+SQL
+
+mariadb -e "SHOW MASTER STATUS; SHOW DATABASES;"
+```
+
+**Penjelasan script yaga**
+
+| Bagian | Fungsi |
+| --- | --- |
+| `nameserver 192.168.122.1` | DNS sementara agar `apt` bisa mengunduh paket (sesuai persyaratan awal). |
+| `apt-get install mariadb-server` | Memasang MariaDB. |
+| `99-replication.cnf` | File konfigurasi tambahan. Nama berawalan 99 dibaca paling akhir, sehingga menimpa nilai bawaan. |
+| `bind-address = 0.0.0.0` | Bawaan MariaDB hanya mendengarkan `127.0.0.1`. Diubah supaya bisa diakses dari node lain. |
+| `server-id = 1` | ID unik server dalam replikasi. Master dan Slave harus berbeda. |
+| `log_bin` | Mengaktifkan binary log, yaitu catatan perubahan data yang dibaca Slave. |
+| `CREATE DATABASE` dan `CREATE TABLE` | Membuat `db_shibuya_K26` dan tabel `request_logs` (kolom `hostname`, `client_ip`, `uri`, `created_at`). |
+| user `repl` | Akun khusus replikasi dengan hak `REPLICATION SLAVE`. Dipakai inumaki untuk membaca binary log. |
+| user `shibuya` | Akun aplikasi untuk worker API. Hak penuh hanya pada database `db_shibuya_K26`. |
+| `'192.224.4.%'` | Tanda `%` berarti wildcard, jadi semua IP Network 4 diizinkan. Ini jawaban untuk "hak akses remote bagi seluruh node di Network 4". |
+| `SHOW MASTER STATUS` | Menampilkan file binary log yang sedang aktif, bukti binary log menyala. |
+
+**Langkah 2. Konfigurasi Slave (inumaki)**
+
+Jalankan setelah script yaga selesai. Simpan sebagai `/root/soal13-inumaki.sh`.
+
+```bash
+#!/bin/bash
+echo "nameserver 192.168.122.1" > /etc/resolv.conf
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server
+
+mkdir -p /var/log/mysql && chown mysql:mysql /var/log/mysql
+cat > /etc/mysql/mariadb.conf.d/99-replication.cnf <<'EOF'
+[mysqld]
+bind-address = 0.0.0.0
+server-id    = 2
+relay-log    = /var/log/mysql/mysql-relay-bin
+EOF
+
+service mariadb restart
+sleep 3
+
+mariadb <<'SQL'
+STOP SLAVE;
+CHANGE MASTER TO
+  MASTER_HOST='192.224.4.8',
+  MASTER_USER='repl',
+  MASTER_PASSWORD='ReplPass123',
+  MASTER_USE_GTID=slave_pos;
+START SLAVE;
+SQL
+
+sleep 3
+mariadb -e "SHOW SLAVE STATUS\G" | grep -E "Master_Host|Slave_IO_Running|Slave_SQL_Running|Last_.*Error"
+```
+
+**Penjelasan script inumaki**
+
+| Bagian | Fungsi |
+| --- | --- |
+| `server-id = 2` | Harus berbeda dari Master (1). |
+| `relay-log` | Tempat Slave menyimpan sementara perubahan yang diambil dari Master sebelum dijalankan. |
+| `CHANGE MASTER TO` | Memberi tahu Slave: Master ada di `192.224.4.8` (yaga), login dengan user `repl`. |
+| `MASTER_USE_GTID=slave_pos` | Slave melacak posisi lewat GTID, jadi tidak perlu mencatat nama file dan posisi binary log secara manual. |
+| `START SLAVE` | Memulai dua thread replikasi: **IO** (mengambil log dari Master) dan **SQL** (menjalankan log itu). |
+| `SHOW SLAVE STATUS` | Memeriksa status. `Slave_IO_Running` dan `Slave_SQL_Running` harus `Yes`. |
+
+**Pengujian**
+
+Di inumaki, cek status replikasi (keduanya harus `Yes`):
+```
+mariadb -e "SHOW SLAVE STATUS\G" | grep -E "Slave_IO_Running|Slave_SQL_Running|Seconds_Behind_Master"
+```
+
+Di **yaga**, masukkan data baru:
+```
+mariadb -e "INSERT INTO db_shibuya_K26.request_logs (hostname,client_ip,uri) VALUES ('uji-replikasi','192.224.4.10','/test');"
+mariadb -e "SELECT * FROM db_shibuya_K26.request_logs;"
+```
+
+Di **inumaki**, periksa bahwa data yang sama muncul:
+```
+mariadb -e "SELECT * FROM db_shibuya_K26.request_logs;"
+```
+
+Uji akses remote dari node Network 4 lain (misalnya `maki`):
+```
+apt-get install -y mariadb-client
+mariadb -h 192.224.4.8 -u shibuya -pShibuyaPass123 -e "SHOW DATABASES;"
+```
+
+Kalau `Slave_IO_Running: Connecting`, cek `ping 192.224.4.8` dari inumaki dan `ss -ltnp | grep 3306` di yaga.
+
+> ![](asset/no_13_yaga.png) .
+> ![](asset/no_13_inumaki.png) 
+
+
+14. Para penyihir lapangan bersiaga di Data Center sebagai pekerja backend untuk memproses aplikasi. Pasang Nginx dan PHP-FPM pada maki dan panda untuk menyajikan web frontend yang menampilkan hostname masing-masing. Pada nanami, todo, dan kirara, siapkan layanan API yang mencatat log request ke database yaga. Konfigurasikan virtual host agar worker merespons domain layanan yang ditentukan. Batasi akses langsung dari klien ke worker, web worker hanya menerima trafik melalui jalur proxy web yang ditentukan, sedangkan worker API hanya menerima trafik melalui geto. Uji bahwa akses langsung dari klien ditolak, sementara akses melalui reverse proxy tetap berhasil.
+
+**Penjelasan soal**
+
+Data Center berisi dua jenis worker:
+
+- **Web frontend** (`maki`, `panda`): Nginx + PHP-FPM, halaman menampilkan hostname masing-masing.
+- **API** (`nanami`, `todo`, `kirara`): Nginx + PHP-FPM, setiap request dicatat ke tabel `request_logs` di database yaga.
+
+Ada dua aturan penting:
+
+1. **Virtual host** memakai `server_name` domain layanan. Di sini dipakai `jujutsu.K26.com` dan `www.jujutsu.K26.com`, yaitu domain yang dikirim gojo. Kalau tabel spesifikasimu menyebut domain lain, ganti nilainya.
+2. **Akses dibatasi.** Worker web hanya menerima trafik dari **gojo** (`192.224.1.4`). Worker API hanya menerima trafik dari **geto** (`192.224.4.2`). Akses langsung dari client harus ditolak (HTTP 403).
+
+**Langkah 1. Worker web (maki dan panda)**
+
+Script yang sama dijalankan di kedua node. Simpan sebagai `/root/soal14-web.sh`.
+
+```bash
+#!/bin/bash
+echo "nameserver 192.168.122.1" > /etc/resolv.conf
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y nginx php-fpm curl
+PHPV=$(ls /etc/php | head -1)
+
+mkdir -p /var/www/web
+cat > /var/www/web/index.php <<'EOF'
+<?php
+echo "<h1>Web Frontend</h1><p>Hostname: " . gethostname() . "</p>";
+EOF
+
+rm -f /etc/nginx/sites-enabled/default
+cat > /etc/nginx/sites-available/web <<'EOF'
+server {
+    listen 80;
+    server_name jujutsu.K26.com www.jujutsu.K26.com;
+    root /var/www/web;
+    index index.php;
+
+    allow 192.224.1.4;
+    deny all;
+
+    location / { try_files $uri $uri/ =404; }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php__PHPV__-fpm.sock;
+    }
+}
+EOF
+sed -i "s/__PHPV__/$PHPV/" /etc/nginx/sites-available/web
+ln -sf /etc/nginx/sites-available/web /etc/nginx/sites-enabled/web
+
+service php$PHPV-fpm restart
+nginx -t && service nginx restart
+```
+
+**Penjelasan script web**
+
+| Bagian | Fungsi |
+| --- | --- |
+| `apt-get install nginx php-fpm` | Nginx sebagai web server, PHP-FPM sebagai pemroses PHP. |
+| `PHPV=$(ls /etc/php ...)` | Mendeteksi versi PHP otomatis, karena nama socket PHP-FPM mengikuti versi. |
+| `index.php` | Menampilkan `gethostname()`, jadi maki menampilkan "maki" dan panda menampilkan "panda". |
+| `rm sites-enabled/default` | Menghapus site bawaan Nginx supaya tidak bentrok `default_server`. |
+| `server_name` | Virtual host hanya merespons domain layanan. |
+| `allow 192.224.1.4; deny all;` | Hanya gojo yang boleh mengakses. IP lain mendapat 403. |
+| `fastcgi_pass unix:...sock` | Meneruskan file `.php` ke PHP-FPM lewat socket. |
+| `nginx -t` | Cek sintaks sebelum restart. |
+
+**Langkah 2. Worker API (nanami, todo, kirara)**
+
+Script yang sama dijalankan di ketiga node. Simpan sebagai `/root/soal14-api.sh`.
+
+```bash
+#!/bin/bash
+echo "nameserver 192.168.122.1" > /etc/resolv.conf
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y nginx php-fpm php-mysql curl
+PHPV=$(ls /etc/php | head -1)
+
+mkdir -p /var/www/api
+cat > /var/www/api/index.php <<'EOF'
+<?php
+header('Content-Type: application/json');
+$host = gethostname();
+$ip = $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'];
+try {
+    $pdo = new PDO("mysql:host=192.224.4.8;dbname=db_shibuya_K26", "shibuya", "ShibuyaPass123");
+    $st = $pdo->prepare("INSERT INTO request_logs (hostname, client_ip, uri) VALUES (?,?,?)");
+    $st->execute([$host, $ip, $_SERVER['REQUEST_URI']]);
+    echo json_encode(["server" => $host, "status" => "logged"]);
+} catch (Exception $e) {
+    http_response_code(500);
+    echo json_encode(["server" => $host, "error" => $e->getMessage()]);
+}
+EOF
+
+rm -f /etc/nginx/sites-enabled/default
+cat > /etc/nginx/sites-available/api <<'EOF'
+server {
+    listen 80;
+    server_name jujutsu.K26.com www.jujutsu.K26.com;
+    root /var/www/api;
+    index index.php;
+
+    allow 192.224.4.2;
+    deny all;
+
+    location / { try_files $uri $uri/ /index.php?$query_string; }
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php__PHPV__-fpm.sock;
+    }
+}
+EOF
+sed -i "s/__PHPV__/$PHPV/" /etc/nginx/sites-available/api
+ln -sf /etc/nginx/sites-available/api /etc/nginx/sites-enabled/api
+
+service php$PHPV-fpm restart
+nginx -t && service nginx restart
+```
+
+**Penjelasan script API**
+
+| Bagian | Fungsi |
+| --- | --- |
+| `php-mysql` | Ekstensi PHP agar bisa terhubung ke MariaDB. |
+| `new PDO("mysql:host=192.224.4.8 ...")` | Koneksi ke database di yaga memakai user `shibuya` (dibuat di soal 13). |
+| `INSERT INTO request_logs` | Mencatat hostname worker, IP klien, dan URI untuk setiap request. |
+| `json_encode(["server" => $host ...])` | Respons JSON berisi nama worker yang menjawab. Ini yang dipakai untuk membuktikan load balancing. |
+| `try/catch` dan kode 500 | Kalau database tidak bisa dihubungi, respons berisi pesan error (membantu debugging). |
+| `allow 192.224.4.2; deny all;` | Hanya geto yang boleh mengakses worker API. |
+| `try_files ... /index.php` | Semua path (termasuk `/api`) diarahkan ke `index.php`. |
+
+Catatan: untuk saat ini IP klien diambil dari `X-Real-IP` kalau ada. Cara ini belum aman dan diperbaiki di soal 17.
+
+**Pengujian**
+
+Akses langsung dari client harus **ditolak**. Jalankan di `itadori` (Alpine: `apk add curl` dulu):
+```
+for ip in 192.224.4.3 192.224.4.4 192.224.4.5 192.224.4.6 192.224.4.7; do
+  echo "== $ip"; curl -s -o /dev/null -w "%{http_code}\n" http://$ip/
+done
+```
+Hasil yang benar: kelima IP menghasilkan `403`.
+
+Akses dari jalur yang diizinkan harus **berhasil**:
+```
+# di gojo (jalur web)
+curl -s http://192.224.4.3/
+curl -s http://192.224.4.4/
+
+# di geto (jalur API)
+curl -s http://192.224.4.5/
+curl -s http://192.224.4.6/
+curl -s http://192.224.4.7/
+```
+Web menampilkan `Hostname: maki` / `panda`. API menjawab `{"server":"nanami","status":"logged"}` dan seterusnya.
+
+![](asset/no_14_1.png)
+![](asset/no_14_2.png)
+
+15. Geto bertugas mengendalikan pembagian beban request API di internal Data Center agar server tidak tumbang bersamaan. Konfigurasikan Nginx pada geto sebagai Load Balancer internal dengan upstream api_cluster yang mengarahkan trafik ke nanami dan todo. Terapkan algoritma Weighted Round Robin dengan bobot 3:1, di mana nanami menerima porsi beban tiga kali lebih banyak daripada todo. Buktikan distribusi beban ini dengan melakukan loop request berulang kali ke geto dari jaringan lokal Data Center dan periksa rasio responnya. 
+
+**Penjelasan soal**
+
+`geto` menjadi **load balancer internal** untuk API. Request API tidak langsung ke satu server, melainkan dibagi ke `nanami` dan `todo`. Algoritmanya **Weighted Round Robin** dengan bobot 3:1: dari setiap 4 request, 3 dijawab nanami dan 1 dijawab todo. Dengan begitu server yang lebih kuat menanggung beban lebih besar.
+
+**Langkah. Konfigurasi geto**
+
+Simpan sebagai `/root/soal15.sh`, lalu jalankan di geto.
+
+```bash
+#!/bin/bash
+echo "nameserver 192.168.122.1" > /etc/resolv.conf
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y nginx curl
+rm -f /etc/nginx/sites-enabled/default
+
+cat > /etc/nginx/conf.d/api_lb.conf <<'EOF'
+upstream api_cluster {
+    server 192.224.4.5:80 weight=3;
+    server 192.224.4.6:80 weight=1;
+}
+
+server {
+    listen 80;
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+nginx -t && service nginx restart
+```
+
+**Penjelasan script**
+
+| Bagian | Fungsi |
+| --- | --- |
+| `upstream api_cluster` | Kelompok server backend bernama `api_cluster` (nama sesuai soal). |
+| `server 192.224.4.5:80 weight=3` | nanami, bobot 3. |
+| `server 192.224.4.6:80 weight=1` | todo, bobot 1. Total bobot 4, jadi rasio 3:1. |
+| `proxy_pass http://api_cluster` | Meneruskan request ke upstream. Nginx otomatis memilih server berdasarkan bobot. |
+| `proxy_set_header` | Meneruskan `Host` dan informasi IP klien ke worker. |
+| `rm sites-enabled/default` | Supaya site bawaan tidak bentrok dengan server baru. |
+
+**Pengujian**
+
+Jalankan dari host lain di jaringan lokal Data Center, misalnya `tengen` (`apt-get install -y curl` dulu):
+```
+for i in $(seq 1 40); do curl -s http://192.224.4.2/; echo; done | grep -o '"server":"[a-z]*"' | sort | uniq -c
+```
+Hasil yang diharapkan:
+```
+     30 "server":"nanami"
+     10 "server":"todo"
+```
+Rasio 30:10 sama dengan 3:1.
+
+**Gambar yang dibutuhkan**
+![](asset/no_15_1.png)
+
+16.  Gojo berdiri di perbatasan DMZ sebagai gerbang publik tunggal bagi seluruh client dari luar maupun dalam.Konfigurasikan Nginx pada gojo untuk melayani domain jujutsu.<xxxx>.com 
+dan www.jujutsu.<xxxx>.com menggunakan metode Path-Based Routing. 
+Atur agar request root (/) diteruskan secara Round Robin ke worker frontend (maki dan panda), sedangkan request ke path /api diteruskan langsung ke geto. Uji dari client Divisi A atau B bahwa akses ke web utama dibalas oleh Maki/Panda, sedangkan akses ke /api diteruskan dan dijawab oleh Nanami/Todo.
+
+**Penjelasan soal**
+
+`gojo` adalah **gerbang publik tunggal**. Semua client mengakses `jujutsu.K26.com` (dan `www`) ke gojo, lalu gojo membagi request berdasarkan *path* (**Path-Based Routing**):
+
+- `/` diteruskan ke worker web `maki` dan `panda` secara **Round Robin** (bergantian).
+- `/api` diteruskan ke `geto`, yang kemudian membagi ke nanami dan todo.
+
+**Langkah. Konfigurasi gojo**
+
+Simpan sebagai `/root/soal16.sh`, lalu jalankan di gojo.
+
+```bash
+#!/bin/bash
+echo "nameserver 192.168.122.1" > /etc/resolv.conf
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y nginx curl
+rm -f /etc/nginx/sites-enabled/default
+
+cat > /etc/nginx/conf.d/gateway.conf <<'EOF'
+upstream web_cluster {
+    server 192.224.4.3:80;
+    server 192.224.4.4:80;
+}
+
+server {
+    listen 80;
+    server_name jujutsu.K26.com www.jujutsu.K26.com;
+
+    location / {
+        proxy_pass http://web_cluster;
+        proxy_set_header Host $host;
+    }
+    location /api {
+        proxy_pass http://192.224.4.2;
+        proxy_set_header Host $host;
+    }
+}
+EOF
+
+nginx -t && service nginx restart
+```
+
+**Penjelasan script**
+
+| Bagian | Fungsi |
+| --- | --- |
+| `upstream web_cluster` | Kelompok worker web: maki dan panda. Tanpa `weight`, Nginx memakai Round Robin. |
+| `server_name` | Gojo hanya melayani `jujutsu.K26.com` dan `www.jujutsu.K26.com`. |
+| `location /` | Semua request biasa diteruskan ke `web_cluster`. |
+| `location /api` | Request berawalan `/api` diteruskan ke geto (`192.224.4.2`). Nginx memilih `location` dengan awalan paling spesifik, jadi `/api` tidak masuk ke `/`. |
+| `proxy_set_header Host $host` | Menjaga nama domain asli sampai ke worker. |
+
+**Pengujian**
+
+Dari client Divisi A atau B (`itadori` atau `ino`; Alpine perlu `apk add curl`):
+
+Web utama, dijawab maki dan panda bergantian:
+```
+for i in 1 2 3 4; do curl -s http://jujutsu.K26.com/ | grep -o "Hostname: [a-z]*"; done
+```
+Hasil: `maki`, `panda`, `maki`, `panda`.
+
+Domain `www`:
+```
+curl -s http://www.jujutsu.K26.com/ | grep -o "Hostname: [a-z]*"
+```
+
+API, dijawab nanami dan todo:
+```
+for i in 1 2 3 4 5 6 7 8; do curl -s http://jujutsu.K26.com/api; echo; done
+```
+Hasil: `"server":"nanami"` muncul 6 kali dan `"server":"todo"` 2 kali.
+
+Akses langsung worker dari client tetap ditolak:
+```
+curl -s -o /dev/null -w "%{http_code}\n" http://192.224.4.3/
+```
+Hasil: `403`.
+
+Kalau DNS belum siap, pakai `curl -H "Host: jujutsu.K26.com" http://192.224.1.4/`.
+
+**Gambar yang dibutuhkan**
+![](asset/no_16_1.png)
+![](asset/no_16_2.png)
+
+
+17. Komando pusat perlu mengetahui IP asli klien yang mengirimkan 
+request tanpa tertukar dengan IP proxy perantara. Konfigurasikan gojo dan geto agar meneruskan informasi alamat klien melalui header X-Real-IP dan X-Forwarded-For. Pastikan geto hanya mempercayai informasi alamat klien yang diterima dari proxy terpercaya, dan skrip API menyimpan alamat klien yang telah diverifikasi ke kolom client_ip pada tabel request_logs di database yaga. Uji dengan mengirimkan request dari klien Network 2 dan Network 3 ke endpoint /api, kemudian periksa database untuk memastikan alamat yang tercatat sesuai dengan IP klien asal, bukan IP gojo atau geto.
+
+**Penjelasan soal**
+
+Karena request melewati dua proxy (gojo lalu geto), worker hanya melihat IP proxy sebagai pengirim. Soal meminta IP **asli client** tetap tercatat di kolom `client_ip`. Mekanismenya:
+
+1. **gojo** mengirim header `X-Real-IP` (IP client) dan `X-Forwarded-For` (rantai IP perantara).
+2. **geto** memakai modul `realip` yang **hanya mempercayai** header itu kalau datang dari gojo (proxy terpercaya). Dari sumber lain, header diabaikan sehingga tidak bisa dipalsukan.
+3. **Skrip API** hanya memakai `X-Real-IP` kalau request datang dari geto, memvalidasi bahwa nilainya IP yang sah, lalu menyimpannya ke `client_ip`.
+
+**Langkah 1. gojo**
+
+```bash
+cat > /etc/nginx/conf.d/gateway.conf <<'EOF'
+upstream web_cluster {
+    server 192.224.4.3:80;
+    server 192.224.4.4:80;
+}
+
+server {
+    listen 80;
+    server_name jujutsu.K26.com www.jujutsu.K26.com;
+
+    location / {
+        proxy_pass http://web_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+    location /api {
+        proxy_pass http://192.224.4.2;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+nginx -t && service nginx reload
+```
+
+**Langkah 2. geto**
+
+```bash
+cat > /etc/nginx/conf.d/api_lb.conf <<'EOF'
+upstream api_cluster {
+    server 192.224.4.5:80 weight=3;
+    server 192.224.4.6:80 weight=1;
+}
+
+set_real_ip_from 192.224.1.4;
+real_ip_header X-Real-IP;
+
+server {
+    listen 80;
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+nginx -t && service nginx reload
+```
+
+**Langkah 3. Worker API (nanami, todo, kirara)**
+
+Skrip ini menimpa `index.php` dari soal 14:
+```bash
+cat > /var/www/api/index.php <<'EOF'
+<?php
+header('Content-Type: application/json');
+$host   = gethostname();
+$remote = $_SERVER['REMOTE_ADDR'];
+$ip     = $remote;
+if ($remote === '192.224.4.2' && !empty($_SERVER['HTTP_X_REAL_IP'])
+    && filter_var($_SERVER['HTTP_X_REAL_IP'], FILTER_VALIDATE_IP)) {
+    $ip = $_SERVER['HTTP_X_REAL_IP'];
+}
+try {
+    $pdo = new PDO("mysql:host=192.224.4.8;dbname=db_shibuya_K26", "shibuya", "ShibuyaPass123");
+    $st = $pdo->prepare("INSERT INTO request_logs (hostname, client_ip, uri) VALUES (?,?,?)");
+    $st->execute([$host, $ip, $_SERVER['REQUEST_URI']]);
+    echo json_encode(["server" => $host, "client_ip" => $ip, "status" => "logged"]);
+} catch (Exception $e) {
+    http_response_code(500);
+    echo json_encode(["server" => $host, "error" => $e->getMessage()]);
+}
+EOF
+php -l /var/www/api/index.php
+```
+
+**Penjelasan script**
+
+| Bagian | Fungsi |
+| --- | --- |
+| gojo: `X-Real-IP $remote_addr` | Gojo **menimpa** header ini dengan IP koneksi yang sebenarnya. Kalau client mengirim `X-Real-IP` palsu, nilainya dibuang. |
+| gojo: `X-Forwarded-For $proxy_add_x_forwarded_for` | Menambahkan IP client ke rantai proxy. |
+| geto: `set_real_ip_from 192.224.1.4` | Hanya gojo yang dipercaya untuk memberi informasi IP client. |
+| geto: `real_ip_header X-Real-IP` | Header yang dibaca untuk mengganti `$remote_addr`. Setelah ini `$remote_addr` di geto berisi IP client asli. |
+| geto: `proxy_set_header X-Real-IP $remote_addr` | Meneruskan IP client asli ke worker. |
+| PHP: `$remote === '192.224.4.2'` | Worker hanya percaya header kalau pengirimnya geto. |
+| PHP: `filter_var(..., FILTER_VALIDATE_IP)` | Memastikan nilainya benar-benar IP, bukan teks sembarang (mencegah injeksi). |
+| PHP: `"client_ip" => $ip` | IP yang sudah diverifikasi disimpan ke database dan ditampilkan di respons. |
+
+**Pengujian**
+
+Dari `itadori` (Network 2) dan `ino` (Network 3):
+```
+curl -s http://jujutsu.K26.com/api
+```
+Respons memuat `"client_ip"` berisi IP client masing-masing (misal `192.224.2.x` dan `192.224.3.x`).
+
+Periksa database di yaga:
+```
+mariadb -e "SELECT id,hostname,client_ip,uri FROM db_shibuya_K26.request_logs ORDER BY id DESC LIMIT 10;"
+```
+Kolom `client_ip` harus IP itadori dan ino, **bukan** `192.224.1.4` (gojo) atau `192.224.4.2` (geto).
+
+Uji pemalsuan header lewat gojo, dari client:
+```
+curl -s -H "X-Real-IP: 1.2.3.4" http://jujutsu.K26.com/api
+```
+`client_ip` tetap IP asli client, bukan `1.2.3.4`.
+
+Uji kepercayaan geto, dari `tengen` (bukan gojo) langsung ke geto:
+```
+curl -s -H "X-Real-IP: 9.9.9.9" http://192.224.4.2/
+```
+`client_ip` berisi `192.224.4.10` (IP tengen). Header `9.9.9.9` diabaikan karena tengen bukan proxy terpercaya.
+
+**Gambar yang dibutuhkan**
+![](asset/no_17_1.png)
+![](asset/no_17_2.png)
+
+
+18.  nanami dan todo merupakan worker API utama, sedangkan kirara 
+disiapkan sebagai worker cadangan. Konfigurasikan upstream 
+api_cluster pada geto agar kirara menjadi server backup, serta 
+terapkan passive health check dengan parameter max_fails=2 dan 
+fail_timeout=5s pada worker API utama. Pastikan kirara menjalankan layanan API yang kompatibel dengan endpoint utama. Simulasikan gangguan dengan menghentikan layanan Nginx atau layanan API pada nanami dan todo. Buktikan dari klien bahwa request ke /api dialihkan ke kirara dan menghasilkan respons API yang valid tanpa error 502 Bad Gateway.
+
+**Penjelasan soal**
+
+`nanami` dan `todo` adalah worker API utama, `kirara` adalah **cadangan** yang baru dipakai kalau keduanya mati. Soal meminta:
+
+1. `kirara` ditandai `backup` di upstream `api_cluster`.
+2. **Passive health check**: kalau sebuah worker gagal 2 kali (`max_fails=2`), Nginx menganggapnya mati selama 5 detik (`fail_timeout=5s`) dan tidak mengirim request ke sana.
+3. Kirara menjalankan API yang sama dengan endpoint utama (sudah, dari script soal 14 dan 17).
+4. Saat nanami dan todo dimatikan, request `/api` tetap berhasil dijawab kirara, tanpa error 502.
+
+**Langkah. Konfigurasi geto**
+
+```bash
+cat > /etc/nginx/conf.d/api_lb.conf <<'EOF'
+upstream api_cluster {
+    server 192.224.4.5:80 weight=3 max_fails=2 fail_timeout=5s;
+    server 192.224.4.6:80 weight=1 max_fails=2 fail_timeout=5s;
+    server 192.224.4.7:80 backup;
+}
+
+set_real_ip_from 192.224.1.4;
+real_ip_header X-Real-IP;
+
+server {
+    listen 80;
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_connect_timeout 2s;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+nginx -t && service nginx reload
+```
+
+**Penjelasan script**
+
+| Bagian | Fungsi |
+| --- | --- |
+| `max_fails=2` | Setelah 2 kegagalan berturut-turut, server ditandai tidak tersedia. |
+| `fail_timeout=5s` | Lama server dianggap mati (5 detik), sekaligus jendela waktu penghitungan kegagalan. Setelah itu Nginx mencoba lagi. |
+| `server 192.224.4.7:80 backup` | Kirara hanya menerima request kalau semua server utama tidak tersedia. |
+| `proxy_next_upstream error timeout http_502 http_503 http_504` | Kalau sebuah worker error, request yang sama langsung dicoba ke server berikutnya. Inilah yang mencegah 502 sampai ke client. |
+| `proxy_connect_timeout 2s` | Batas waktu koneksi pendek supaya perpindahan ke kirara cepat. |
+
+Pastikan kirara sudah siap (dari geto):
+```
+curl -s http://192.224.4.7/
+```
+
+**Pengujian**
+
+Kondisi normal, dari client:
+```
+for i in $(seq 1 8); do curl -s http://jujutsu.K26.com/api; echo; done
+```
+Hanya nanami dan todo yang menjawab. Kirara belum dipakai.
+
+Simulasi gangguan: matikan layanan di **nanami dan todo**:
+```
+service nginx stop
+```
+
+Dari client, ulangi:
+```
+for i in $(seq 1 8); do curl -s -w " [%{http_code}]\n" http://jujutsu.K26.com/api; done
+```
+Semua respons `"server":"kirara"` dengan kode `200`, tanpa 502.
+
+Variasi gangguan lain (Nginx hidup tapi API mati), di nanami dan todo:
+```
+service nginx start
+PHPV=$(ls /etc/php | head -1); service php$PHPV-fpm stop
+```
+Nginx mengembalikan 502 ke geto, lalu geto mengalihkan ke kirara berkat `proxy_next_upstream`. Hasil di client tetap `kirara` dan `200`.
+
+Pulihkan layanan di nanami dan todo:
+```
+service nginx start
+PHPV=$(ls /etc/php | head -1); service php$PHPV-fpm start
+```
+Setelah sekitar 5 detik, nanami dan todo kembali dipakai.
+
+**Gambar yang dibutuhkan**
+![](asset/no_18_1.png)
+![](asset/no_18_2.png)
+
+19. Gojo bertugas mengoptimalkan layanan web sekaligus membatasi request berlebihan. Konfigurasikan Nginx Proxy Caching untuk halaman web frontend dengan masa berlaku cache 10 menit dan tambahkan header X-Cache-Status. Terapkan rate limiting pada path /api dengan batas 10 request per detik per IP klien. Buktikan bahwa request ke halaman web yang memenuhi syarat cache menghasilkan status MISS pada akses awal dan HIT pada akses berikutnya. Uji rate limiting secara terpisah dengan mengirimkan request beruntun ke /api, kemudian catat status respons yang dihasilkan ketika batas terlampaui.
+
+**Penjelasan soal**
+
+Ada dua optimasi di gojo:
+
+1. **Proxy cache** untuk halaman web (`/`). Respons dari maki atau panda disimpan di gojo selama 10 menit. Request berikutnya dijawab langsung dari cache tanpa membebani worker. Header `X-Cache-Status` menunjukkan hasilnya: `MISS` (belum ada di cache, diambil dari worker) atau `HIT` (dijawab dari cache).
+2. **Rate limiting** untuk `/api`: maksimal 10 request per detik per IP client. Kelebihannya ditolak, sehingga satu client tidak bisa membanjiri API.
+
+**Langkah. Konfigurasi gojo**
+
+```bash
+mkdir -p /var/cache/nginx/web
+cat > /etc/nginx/conf.d/gateway.conf <<'EOF'
+upstream web_cluster {
+    server 192.224.4.3:80;
+    server 192.224.4.4:80;
+}
+
+proxy_cache_path /var/cache/nginx/web levels=1:2 keys_zone=web_cache:10m max_size=100m inactive=10m;
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
+log_format audit '$remote_addr "$request" $status ups=$upstream_status cache=$upstream_cache_status rl=$limit_req_status rt=$request_time';
+
+server {
+    listen 80;
+    server_name jujutsu.K26.com www.jujutsu.K26.com;
+    access_log /var/log/nginx/gojo_audit.log audit;
+
+    location / {
+        proxy_pass http://web_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        proxy_cache web_cache;
+        proxy_cache_valid 200 10m;
+        add_header X-Cache-Status $upstream_cache_status always;
+    }
+
+    location /api {
+        limit_req zone=api_limit;
+        proxy_pass http://192.224.4.2;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+EOF
+nginx -t && service nginx restart
+```
+
+**Penjelasan script**
+
+| Bagian | Fungsi |
+| --- | --- |
+| `proxy_cache_path ... keys_zone=web_cache:10m` | Lokasi penyimpanan cache di disk dan zona memori `web_cache` untuk indeks cache. |
+| `inactive=10m` | Cache yang tidak diakses 10 menit dihapus. |
+| `proxy_cache web_cache` | Mengaktifkan cache pada `location /`. |
+| `proxy_cache_valid 200 10m` | Respons berstatus 200 berlaku 10 menit, sesuai soal. |
+| `add_header X-Cache-Status $upstream_cache_status always` | Menambahkan header `X-Cache-Status` (`MISS`, `HIT`, dan lainnya) pada respons. |
+| `limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s` | Menghitung request **per IP client**, batas 10 request per detik. |
+| `limit_req zone=api_limit` | Menerapkan batas hanya pada `location /api`. Request yang melebihi batas ditolak dengan status 503 (bawaan Nginx). |
+| `log_format audit` | Format log khusus yang mencatat status, hasil cache (`cache=`), dan status rate limit (`rl=`). Dipakai di soal 20 untuk analisis. |
+
+**Pengujian cache**
+
+Dari client:
+```
+curl -s -D - -o /dev/null http://jujutsu.K26.com/ | grep -i x-cache
+curl -s -D - -o /dev/null http://jujutsu.K26.com/ | grep -i x-cache
+curl -s -D - -o /dev/null http://jujutsu.K26.com/ | grep -i x-cache
+```
+Hasil: akses pertama `X-Cache-Status: MISS`, akses kedua dan seterusnya `X-Cache-Status: HIT`.
+
+Kalau akses pertama sudah `HIT` karena cache lama, kosongkan cache di gojo lalu ulangi:
+```
+rm -rf /var/cache/nginx/web/* && service nginx reload
+```
+Saat `HIT`, hostname yang tampil selalu sama (maki atau panda) karena jawaban berasal dari cache. Itu normal.
+
+**Pengujian rate limiting**
+
+Kirim 40 request bersamaan dari client dan hitung hasilnya:
+```
+for i in $(seq 1 40); do curl -s -o /dev/null -w "%{http_code}\n" http://jujutsu.K26.com/api & done | sort | uniq -c
+```
+Hasil: sebagian `200` dan sisanya `503`. Status `503` adalah respons ketika batas terlampaui.
+
+Bukti dari log gojo:
+```
+grep -c "rl=REJECTED" /var/log/nginx/gojo_audit.log
+```
+
+**Gambar yang dibutuhkan**
+![](asset/no_19_1.png)
+![](asset/no_19_2.png)
+
+
+20. . Sebelum Curtain di Shibuya resmi dibuka, Kusakabe memimpin audit untuk menguji kapasitas layanan. Dari terminal kusakabe, jalankan benchmark menggunakan Apache Benchmark dengan parameter -n 600 -c 30 menuju http://jujutsu.<xxxx>.com/. Catat Requests per Second (RPS), latensi, dan jumlah request yang gagal. Lakukan 
+pengujian tambahan pada endpoint /api untuk mengamati efek rate 
+limiting. Bandingkan hasil pengujian baseline dengan hasil ketika rate limiting aktif, serta gunakan access log gojo untuk membedakan kegagalan aplikasi, koneksi, dan request yang ditolak oleh kebijakan rate limit.
+
+**Penjelasan soal**
+
+Ini audit kapasitas dari `kusakabe` memakai Apache Benchmark (`ab`). `-n 600` berarti total 600 request, `-c 30` berarti 30 request bersamaan. Yang dicatat: **Requests per Second (RPS)**, **latensi**, dan **jumlah request gagal**. Pengujian dilakukan tiga kali:
+
+1. Halaman web `/` (dilayani cache gojo).
+2. `/api` **tanpa** rate limiting (baseline).
+3. `/api` **dengan** rate limiting aktif.
+
+Lalu hasilnya dibandingkan, dan access log gojo dipakai untuk membedakan tiga jenis kegagalan: **aplikasi** (worker atau database error), **koneksi** (client atau jaringan putus), dan **ditolak rate limit** (kebijakan, bukan error).
+
+**Langkah 1. Persiapan**
+
+Di `kusakabe` (Alpine):
+```
+apk add apache2-utils
+ping -c 2 jujutsu.K26.com
+```
+
+Di gojo, siapkan script untuk menyalakan dan mematikan rate limit. Simpan sebagai `/root/ratelimit.sh`:
+```bash
+#!/bin/bash
+F=/etc/nginx/conf.d/gateway.conf
+case "$1" in
+  off) sed -i 's/^\(\s*\)limit_req zone/\1#limit_req zone/' $F ;;
+  on)  sed -i 's/^\(\s*\)#limit_req zone/\1limit_req zone/' $F ;;
+  *)   echo "pakai: bash ratelimit.sh on|off"; exit 1 ;;
+esac
+nginx -t && service nginx reload
+grep -n limit_req $F
+```
+
+| Bagian | Fungsi |
+| --- | --- |
+| `off` | Memberi tanda `#` pada baris `limit_req zone`, sehingga rate limit nonaktif (baseline). |
+| `on` | Menghapus tanda `#`, rate limit aktif lagi. |
+| `nginx -t && service nginx reload` | Menguji sintaks lalu memuat ulang konfigurasi tanpa memutus koneksi. |
+| `grep -n limit_req` | Menampilkan status baris `limit_req` sebagai bukti. |
+
+**Langkah 2. Jalankan benchmark**
+
+Sebelum setiap tahap, kosongkan log di gojo supaya analisisnya bersih:
+```
+: > /var/log/nginx/gojo_audit.log
+```
+
+Tahap 1, web `/` di kusakabe:
+```
+ab -n 600 -c 30 http://jujutsu.K26.com/ | tee /root/ab_web.txt
+```
+
+Tahap 2, `/api` tanpa rate limit. Di gojo `bash /root/ratelimit.sh off`, lalu di kusakabe:
+```
+ab -n 600 -c 30 http://jujutsu.K26.com/api | tee /root/ab_api_nolimit.txt
+```
+
+Tahap 3, `/api` dengan rate limit. Di gojo `bash /root/ratelimit.sh on`, lalu di kusakabe:
+```
+ab -n 600 -c 30 http://jujutsu.K26.com/api | tee /root/ab_api_limit.txt
+```
+
+Ringkasan angka dari ketiga hasil:
+```
+grep -E "Requests per second|Time per request|Failed requests|Non-2xx" /root/ab_*.txt
+```
+
+**Langkah 3. Catat hasil**
+
+| Metrik (baris di output `ab`) | Web `/` | `/api` tanpa limit | `/api` dengan limit |
+| --- | --- | --- | --- |
+| Requests per second | | | |
+| Time per request (mean) | | | |
+| Time per request (across all concurrent requests) | | | |
+| Failed requests | | | |
+| Non-2xx responses | | | |
+
+**Cara membaca hasil**
+
+- **Web `/`** biasanya paling cepat (RPS tinggi) karena hampir semua request dijawab dari cache gojo.
+- **`/api` tanpa limit** lebih lambat karena tiap request melewati geto, PHP, lalu menulis ke database.
+- **`/api` dengan limit** punya `Non-2xx responses` besar (status 503). RPS terlihat tinggi karena request yang ditolak dijawab sangat cepat. Itu bukan berarti performa lebih baik, karena request yang benar-benar berhasil hanya sekitar 10 per detik.
+- `Failed requests` pada `/api` bisa berisi hitungan **Length** walaupun tidak ada error. Respons `nanami` dan `todo` berbeda panjang, sehingga `ab` menganggap ukurannya tidak konsisten. Karena itu gunakan `Non-2xx responses` dan log gojo sebagai acuan kegagalan sebenarnya.
+
+**Langkah 4. Analisis access log gojo**
+
+Di gojo, setelah tahap 3 selesai:
+```bash
+L=/var/log/nginx/gojo_audit.log
+echo "--- jumlah per status ---";      awk '{print $5}' $L | sort | uniq -c
+echo "--- ditolak rate limit ---";      grep -c "rl=REJECTED" $L
+echo "--- kegagalan aplikasi ---";      grep -E ' (500|502|504) ups=(500|502|504)' $L | wc -l
+echo "--- kegagalan koneksi ---";       grep -E ' 499 ups=| (502|504) ups=-' $L | wc -l
+echo "--- cache ---";                   grep -o "cache=[A-Z-]*" $L | sort | uniq -c
+```
+
+| Pola di log | Artinya |
+| --- | --- |
+| status `503`, `ups=-`, `rl=REJECTED` | **Ditolak rate limit.** Ini kebijakan, bukan error server. |
+| status `500`/`502`/`504` dengan `ups=` sama | **Kegagalan aplikasi.** Worker, PHP-FPM, atau database bermasalah. |
+| status `499`, atau `502`/`504` dengan `ups=-` | **Kegagalan koneksi.** Client memutus koneksi, atau gojo gagal tersambung ke upstream. |
+| status `200` dengan `cache=HIT` atau `MISS` | Berhasil. Menunjukkan efektivitas cache pada web. |
+
+Kalau `ab` melaporkan `Failed requests` besar tetapi log gojo tidak mencatat kegagalan aplikasi atau penolakan, penyebabnya di sisi koneksi (jaringan atau batas proses), bukan kebijakan rate limit.
+
+**Gambar yang dibutuhkan**
+![](asset/no_20_1.png)
+![](asset/no_20_2.png)
+![](asset/no_20_3.png)
