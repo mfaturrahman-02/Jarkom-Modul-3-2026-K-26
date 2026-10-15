@@ -36,7 +36,7 @@ Pembagian jaringan untuk host:
 | | | | | inumaki | Debian (Infrastruktur) | 192.224.4.9/24 |
 
 tupologi jaringan
-
+![](asset/tupologi.png) 
 
 **Untuk Network 1**
 
@@ -985,20 +985,6 @@ ping -c 3 google.com
 ```
 
 <img width="764" height="416" alt="Screenshot 2026-10-14 135256" src="https://github.com/user-attachments/assets/e2467e35-88ef-4bc4-b260-eaae3d79c80a" />
-=======
-Uji ping ke domain internet dari client `itadori` (bukti forwarder dan NAT berjalan):
-```
-ping -c 3 jujutsu.K26.com
-ping -c 3 google.com
-```
-
-**Gambar yang dibutuhkan (soal 12)**
-
-> **[GAMBAR 12-1]** Terminal `itadori`: `cat /etc/resolv.conf` (search dan dua nameserver).
->
-> **[GAMBAR 12-2]** Terminal `itadori`: `dig` A record, CNAME `www`, dan PTR `-x 192.224.1.4` ke kedua DNS.
->
-> **[GAMBAR 12-3]** Terminal `itadori`: `dig google.com` ke kedua DNS dan `ping -c 3 google.com` berhasil.
 
 
 13. Kepala Sekolah Yaga dan Inumaki mendirikan database terpusat yang redundan agar log aktivitas kutukan tetap aman tersimpan. Konfigurasikan MariaDB pada yaga sebagai DB-Master dan inumaki sebagai DB-Slave. Buat database db_shibuya_<xxxx> beserta tabel request_logs di Master, aktifkan binary logging (log-bin, server-id), lalu hubungkan inumaki sebagai Slave yang menyalin data secara realtime dengan CHANGE MASTER TO. Berikan hak akses remote bagi seluruh node di Network 4, lalu buktikan replikasi berhasil dengan memasukkan data baru di Master dan memeriksa hasilnya di Slave.
@@ -1142,17 +1128,9 @@ mariadb -h 192.224.4.8 -u shibuya -pShibuyaPass123 -e "SHOW DATABASES;"
 
 Kalau `Slave_IO_Running: Connecting`, cek `ping 192.224.4.8` dari inumaki dan `ss -ltnp | grep 3306` di yaga.
 
-**Gambar yang dibutuhkan**
+> ![](asset/no_13_yaga.png) .
+> ![](asset/no_13_inumaki.png) 
 
-> **[GAMBAR 13-1]** Terminal `yaga`: output `SHOW MASTER STATUS` dan `SHOW DATABASES` (ada `db_shibuya_K26` dan file `mysql-bin`).
->
-> **[GAMBAR 13-2]** Terminal `inumaki`: `SHOW SLAVE STATUS` dengan `Slave_IO_Running: Yes` dan `Slave_SQL_Running: Yes`.
->
-> **[GAMBAR 13-3]** Terminal `yaga`: perintah `INSERT` dan `SELECT` yang menampilkan baris `uji-replikasi`.
->
-> **[GAMBAR 13-4]** Terminal `inumaki`: `SELECT` yang menampilkan baris `uji-replikasi` yang sama.
->
-> **[GAMBAR 13-5]** Terminal `maki`: login remote ke yaga dengan user `shibuya` dan `SHOW DATABASES` berhasil.
 
 14. Para penyihir lapangan bersiaga di Data Center sebagai pekerja backend untuk memproses aplikasi. Pasang Nginx dan PHP-FPM pada maki dan panda untuk menyajikan web frontend yang menampilkan hostname masing-masing. Pada nanami, todo, dan kirara, siapkan layanan API yang mencatat log request ke database yaga. Konfigurasikan virtual host agar worker merespons domain layanan yang ditentukan. Batasi akses langsung dari klien ke worker, web worker hanya menerima trafik melalui jalur proxy web yang ditentukan, sedangkan worker API hanya menerima trafik melalui geto. Uji bahwa akses langsung dari klien ditolak, sementara akses melalui reverse proxy tetap berhasil.
 
@@ -1311,32 +1289,12 @@ curl -s http://192.224.4.5/
 curl -s http://192.224.4.6/
 curl -s http://192.224.4.7/
 ```
-Web menampilkan `Hostname: maki` / `panda`. API menjawab `{"server":"nanami","status":"logged"}` dan seterusnya. Akses lewat reverse proxy gojo yang utuh diuji di soal 16.
+Web menampilkan `Hostname: maki` / `panda`. API menjawab `{"server":"nanami","status":"logged"}` dan seterusnya.
 
-Pastikan log API tersimpan, di yaga:
-```
-mariadb -e "SELECT * FROM db_shibuya_K26.request_logs ORDER BY id DESC LIMIT 5;"
-```
+![](asset/no_14_1.png)
+![](asset/no_14_2.png)
 
-**Gambar yang dibutuhkan**
-
-> **[GAMBAR 14-1]** Terminal `itadori`: loop `curl` ke 5 worker, semuanya `403`.
->
-> **[GAMBAR 14-2]** Terminal `gojo`: `curl` ke maki dan panda menampilkan `Hostname: maki` dan `Hostname: panda`.
->
-> **[GAMBAR 14-3]** Terminal `geto`: `curl` ke nanami, todo, kirara menampilkan JSON `"status":"logged"`.
->
-> **[GAMBAR 14-4]** Terminal `yaga`: `SELECT` pada `request_logs` yang menunjukkan log dari worker API.
-
-15. Geto bertugas mengendalikan pembagian beban request API di 
-internal Data Center agar server tidak tumbang bersamaan. 
-Konfigurasikan Nginx pada geto sebagai Load Balancer internal 
-dengan upstream api_cluster yang mengarahkan trafik ke nanami 
-dan todo. Terapkan algoritma Weighted Round Robin dengan bobot 
-3:1, di mana nanami menerima porsi beban tiga kali lebih banyak 
-daripada todo. Buktikan distribusi beban ini dengan melakukan loop 
-request berulang kali ke geto dari jaringan lokal Data Center dan 
-periksa rasio responnya. 
+15. Geto bertugas mengendalikan pembagian beban request API di internal Data Center agar server tidak tumbang bersamaan. Konfigurasikan Nginx pada geto sebagai Load Balancer internal dengan upstream api_cluster yang mengarahkan trafik ke nanami dan todo. Terapkan algoritma Weighted Round Robin dengan bobot 3:1, di mana nanami menerima porsi beban tiga kali lebih banyak daripada todo. Buktikan distribusi beban ini dengan melakukan loop request berulang kali ke geto dari jaringan lokal Data Center dan periksa rasio responnya. 
 
 **Penjelasan soal**
 
@@ -1397,16 +1355,8 @@ Hasil yang diharapkan:
 ```
 Rasio 30:10 sama dengan 3:1.
 
-Bukti tambahan di yaga (jumlah log per worker):
-```
-mariadb -e "SELECT hostname, COUNT(*) FROM db_shibuya_K26.request_logs GROUP BY hostname;"
-```
-
 **Gambar yang dibutuhkan**
-
-> **[GAMBAR 15-1]** Terminal `tengen`: hasil loop 40 request dengan `uniq -c` (30 nanami, 10 todo).
->
-> **[GAMBAR 15-2]** Terminal `yaga`: `GROUP BY hostname` pada `request_logs` (opsional).
+![](asset/no_15_1.png)
 
 16.  Gojo berdiri di perbatasan DMZ sebagai gerbang publik tunggal bagi seluruh client dari luar maupun dalam.Konfigurasikan Nginx pada gojo untuk melayani domain jujutsu.<xxxx>.com 
 dan www.jujutsu.<xxxx>.com menggunakan metode Path-Based Routing. 
@@ -1494,14 +1444,9 @@ Hasil: `403`.
 Kalau DNS belum siap, pakai `curl -H "Host: jujutsu.K26.com" http://192.224.1.4/`.
 
 **Gambar yang dibutuhkan**
+![](asset/no_16_1.png)
+![](asset/no_16_2.png)
 
-> **[GAMBAR 16-1]** Terminal client: loop `/` menampilkan `maki` dan `panda` bergantian.
->
-> **[GAMBAR 16-2]** Terminal client: `curl www.jujutsu.K26.com`.
->
-> **[GAMBAR 16-3]** Terminal client: loop `/api` menampilkan `nanami` dan `todo`.
->
-> **[GAMBAR 16-4]** Terminal client: akses langsung ke worker menghasilkan `403`.
 
 17. Komando pusat perlu mengetahui IP asli klien yang mengirimkan 
 request tanpa tertukar dengan IP proxy perantara. Konfigurasikan gojo dan geto agar meneruskan informasi alamat klien melalui header X-Real-IP dan X-Forwarded-For. Pastikan geto hanya mempercayai informasi alamat klien yang diterima dari proxy terpercaya, dan skrip API menyimpan alamat klien yang telah diverifikasi ke kolom client_ip pada tabel request_logs di database yaga. Uji dengan mengirimkan request dari klien Network 2 dan Network 3 ke endpoint /api, kemudian periksa database untuk memastikan alamat yang tercatat sesuai dengan IP klien asal, bukan IP gojo atau geto.
@@ -1636,16 +1581,9 @@ curl -s -H "X-Real-IP: 9.9.9.9" http://192.224.4.2/
 `client_ip` berisi `192.224.4.10` (IP tengen). Header `9.9.9.9` diabaikan karena tengen bukan proxy terpercaya.
 
 **Gambar yang dibutuhkan**
+![](asset/no_17_1.png)
+![](asset/no_17_2.png)
 
-> **[GAMBAR 17-1]** Terminal `itadori`: `curl /api` dengan `client_ip` IP itadori.
->
-> **[GAMBAR 17-2]** Terminal `ino`: `curl /api` dengan `client_ip` IP ino.
->
-> **[GAMBAR 17-3]** Terminal `yaga`: `SELECT` pada `request_logs` dengan `client_ip` IP client asal.
->
-> **[GAMBAR 17-4]** Terminal client: uji header palsu `1.2.3.4` tidak berpengaruh.
->
-> **[GAMBAR 17-5]** Terminal `tengen`: uji header palsu `9.9.9.9` langsung ke geto diabaikan.
 
 18.  nanami dan todo merupakan worker API utama, sedangkan kirara 
 disiapkan sebagai worker cadangan. Konfigurasikan upstream 
@@ -1739,14 +1677,8 @@ PHPV=$(ls /etc/php | head -1); service php$PHPV-fpm start
 Setelah sekitar 5 detik, nanami dan todo kembali dipakai.
 
 **Gambar yang dibutuhkan**
-
-> **[GAMBAR 18-1]** Terminal client: kondisi normal, hanya nanami dan todo yang menjawab.
->
-> **[GAMBAR 18-2]** Terminal `nanami` dan `todo`: `service nginx stop`.
->
-> **[GAMBAR 18-3]** Terminal client: semua respons `kirara` dengan kode `200`, tanpa 502.
->
-> **[GAMBAR 18-4]** Terminal client: setelah layanan dipulihkan, nanami dan todo kembali menjawab.
+![](asset/no_18_1.png)
+![](asset/no_18_2.png)
 
 19. Gojo bertugas mengoptimalkan layanan web sekaligus membatasi request berlebihan. Konfigurasikan Nginx Proxy Caching untuk halaman web frontend dengan masa berlaku cache 10 menit dan tambahkan header X-Cache-Status. Terapkan rate limiting pada path /api dengan batas 10 request per detik per IP klien. Buktikan bahwa request ke halaman web yang memenuhi syarat cache menghasilkan status MISS pada akses awal dan HIT pada akses berikutnya. Uji rate limiting secara terpisah dengan mengirimkan request beruntun ke /api, kemudian catat status respons yang dihasilkan ketika batas terlampaui.
 
@@ -1843,12 +1775,9 @@ grep -c "rl=REJECTED" /var/log/nginx/gojo_audit.log
 ```
 
 **Gambar yang dibutuhkan**
+![](asset/no_19_1.png)
+![](asset/no_19_2.png)
 
-> **[GAMBAR 19-1]** Terminal client: tiga kali `curl` header, pertama `MISS` lalu `HIT`.
->
-> **[GAMBAR 19-2]** Terminal client: hasil 40 request ke `/api`, campuran `200` dan `503`.
->
-> **[GAMBAR 19-3]** Terminal `gojo`: `grep -c "rl=REJECTED"` pada log audit.
 
 20. . Sebelum Curtain di Shibuya resmi dibuka, Kusakabe memimpin audit untuk menguji kapasitas layanan. Dari terminal kusakabe, jalankan benchmark menggunakan Apache Benchmark dengan parameter -n 600 -c 30 menuju http://jujutsu.<xxxx>.com/. Catat Requests per Second (RPS), latensi, dan jumlah request yang gagal. Lakukan 
 pengujian tambahan pada endpoint /api untuk mengamati efek rate 
@@ -1958,16 +1887,6 @@ echo "--- cache ---";                   grep -o "cache=[A-Z-]*" $L | sort | uniq
 Kalau `ab` melaporkan `Failed requests` besar tetapi log gojo tidak mencatat kegagalan aplikasi atau penolakan, penyebabnya di sisi koneksi (jaringan atau batas proses), bukan kebijakan rate limit.
 
 **Gambar yang dibutuhkan**
-
-> **[GAMBAR 20-1]** Terminal `kusakabe`: hasil `ab` untuk `/` (RPS, Time per request, Failed requests).
->
-> **[GAMBAR 20-2]** Terminal `kusakabe`: hasil `ab` untuk `/api` tanpa rate limit.
->
-> **[GAMBAR 20-3]** Terminal `gojo`: `bash /root/ratelimit.sh on` dan `off` (bukti status `limit_req`).
->
-> **[GAMBAR 20-4]** Terminal `kusakabe`: hasil `ab` untuk `/api` dengan rate limit (terlihat `Non-2xx responses`).
->
-> **[GAMBAR 20-5]** Terminal `gojo`: hasil analisis access log (jumlah per status, `REJECTED`, aplikasi, koneksi, cache).
->
-> **[GAMBAR 20-6]** Tabel perbandingan hasil yang sudah diisi (bisa langsung di README).
->>>>>>> Stashed changes
+![](asset/no_20_1.png)
+![](asset/no_20_2.png)
+![](asset/no_20_3.png)
