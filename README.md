@@ -409,6 +409,12 @@ ps aux | grep '[d]hcrelay'
 ```
 Pastikan relay menggunakan interface eth2, eth3, dan eth4.
 
+Pada node tengen, jalankan:
+```
+rm -f /root/dhcp.pcap
+```
+Perintah ini menghapus file capture lama agar hasil pengujian baru tersimpan secara terpisah.
+
 Mulai packet capture pada tengen, jalankan perintah berikut pada tengen untuk merekam paket DHCP melalui eth0:
 ```
 tcpdump -ni eth0 -w /root/dhcp.pcap 'port 67 or port 68'
@@ -425,7 +431,11 @@ udhcpc -i eth0 -n
 
 <img width="498" height="164" alt="image" src="https://github.com/user-attachments/assets/a2426bfb-7d0b-4d48-b882-0c43c2807f80" />
 
-Kembali ke tengen, lalu baca hasil capture:
+Kembali ke terminal tengen setelah proses DHCP selesai. Pastikan file hasil capture tersedia:
+```
+ls -lh /root/dhcp.pcap
+```
+lalu baca hasil capture dengan jalankan:
 ```
 tcpdump -nn -vvv -r /root/dhcp.pcap 'port 67 or port 68'
 ```
@@ -486,11 +496,7 @@ ping -c 2 192.224.2.1
 <img width="898" height="495" alt="image" src="https://github.com/user-attachments/assets/7b02448b-1aa0-4965-8800-d5ec6d10d3f9" />
 
 10. Setelah gangguan Shibuya tertangani, pastikan pemulihan bertahan setelah restart. Aktifkan autostart DHCP Server pada tengen dan DHCP Relay pada jichi, lalu restart kedua node. Verifikasi status layanan, IP, gateway, lease, dan konektivitas client Network 2–3. Pastikan kebijakan Pool 1, Pool 2, short lease, long lease, dan fixed address tetap berlaku.
-<<<<<<< Updated upstream
-    
-=======
 
->>>>>>> Stashed changes
 Pada tengen, periksa interface DHCP Server:
 ```
 cat /etc/default/isc-dhcp-server
