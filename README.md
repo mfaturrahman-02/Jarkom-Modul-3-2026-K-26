@@ -1858,11 +1858,11 @@ grep -E "Requests per second|Time per request|Failed requests|Non-2xx" /root/ab_
 
 | Metrik (baris di output `ab`) | Web `/` | `/api` tanpa limit | `/api` dengan limit |
 | --- | --- | --- | --- |
-| Requests per second | | | |
-| Time per request (mean) | | | |
-| Time per request (across all concurrent requests) | | | |
-| Failed requests | | | |
-| Non-2xx responses | | | |
+| Requests per second | 5010.86 [#/sec] (mean) | 479.75 [#/sec] (mean) | 897.57 [#/sec] (mean) |
+| Time per request (mean) | 5.987 [ms] (mean) | 62.533 [ms] (mean) | 33.424 [ms] (mean) |
+| Time per request (across all concurrent requests) | 0.200 [ms] (mean, across all concurrent requests) | 2.084 [ms] (mean, across all concurrent requests) | 1.114 [ms] (mean, across all concurrent requests) |
+| Failed requests | 0 | 0 | 0 |
+| Non-2xx responses | 0 | 0 | 0 |
 
 **Cara membaca hasil**
 
